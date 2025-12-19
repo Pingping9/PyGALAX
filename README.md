@@ -234,9 +234,6 @@ For questions, suggestions, or collaborations, please contact:
 If you use PyGALAX, the code from this repository, or from GALAX, please cite the following papers:
 
 ```bibtex
-Wang, P., Yuan, Y., Li, L., & Lu, Y. (2026). PyGALAX: An Open-Source Python Toolkit for Advanced Explainable Geospatial Machine Learning. The Journal of Open Source Software.
-```
-```bibtex
 Wang, P., Yuan, Y., Li, L., & Lu, Y. (2025). GALAX: A Framework for Geospatial Analysis Leveraging AutoML and eXplainable AI. Annals of the American Association of Geographers, 1–27. https://doi.org/10.1080/24694452.2025.2591684
 ```
 
