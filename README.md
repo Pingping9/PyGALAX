@@ -82,6 +82,12 @@ PyGALAX/
 │   ├── classification_precision.png
 │   └── classification_feature.png
 │
+├── tests/                       # Unit tests for PyGALAX
+│   ├── test_kernel.py         
+│   ├── test_bandwidth.py       
+│   ├── test_model.py           
+│   └── test_results.py  
+│
 ├── .gitignore
 ├── MANIFEST.in
 ├── pyproject.toml
@@ -103,6 +109,8 @@ PyGALAX/
 - **`data/`**: Sample datasets from Buffalo 311 call requests for testing and demonstration purposes.
 
 - **`results/`**: Example output files showing the structure of saved PyGALAX results.
+
+- **`tests/`**: Comprehensive unit test suite covering all modules.
 
 ## Required Python Packages
 
