@@ -24,7 +24,7 @@ affiliations:
    index: 1
  - name: Atmospheric, Climate, and Earth Sciences Division, Pacific Northwest National Laboratory, Richland, WA, USA
    index: 2
-date: 20 December 2025
+date: 2025-12-20
 bibliography: paper.bib
 ---
 
@@ -58,7 +58,7 @@ pip install .
 
 # Key features
 
-PyGALAX offers several distinctive capabilities that make it suitable for advanced spatial analysis (Figure 1 and Table 1):
+PyGALAX offers several distinctive capabilities that make it suitable for advanced spatial analysis (\autoref{fig:framework} and \autoref{tab:commands}):
 
 - **Spatial AutoML integration**: PyGALAX automates the GALAX framework that implements geographically weighted AutoML, where different machine learning algorithms (e.g., Random Forest, XGBoost, Extra Trees) are automatically selected and optimized for each spatial location based on local data characteristics. This approach enables the capture of varying relationship structures across geographic space.
 
@@ -72,12 +72,12 @@ PyGALAX offers several distinctive capabilities that make it suitable for advanc
 
 - **Parallel processing**: Built-in support for multicore processing enables efficient analysis of large spatial datasets.
 
-![PyGALAX Methodological Framework Extended from @Wang2025GALAX.\label{fig:framework}](figure1.png)
+![Figure 1. PyGALAX Methodological Framework Extended from @Wang2025GALAX.\label{fig:framework}](figure1.png)
 
-: Example PyGALAX Commands []{label="tab:commands"}
+: Table 1. Example PyGALAX Commands {label="tab:commands"}
 
-| **Command** | **Description** |
-|------|--------------|
+| Command | Description |
+|---------|---|
 | `Kernel(coords[i], coords, bw, fixed=False, function='bisquare')` | Create a kernel weighting matrix for spatial dependence modeling. |
 | `search_bw_lw_ISA(X, y, coords)` | Run standalone ISA to estimate an optimal bandwidth. |
 | `search_bandwidth(X, y, coords, automl_settings)` | Perform bandwidth optimization using AutoML model performance metrics. |
