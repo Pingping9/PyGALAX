@@ -28,7 +28,7 @@ dependencies = [
   "scipy>=1.9",
   "joblib>=1.2",
   "shap>=0.47.2",
-  "flaml>=2.3.4",
+  "flaml[automl]>=2.3.4",
   "libpysal>=4.7",
   "esda>=2.5",
 ]
