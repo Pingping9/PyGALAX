@@ -31,12 +31,6 @@ PyGALAX builds upon and improves the GALAX framework. Critical enhancements in P
 
 ## Installation
 
-### From PyPI (recommended)
-
-```bash
-pip install PyGALAX
-```
-
 ### Development installation
 
 ```bash
