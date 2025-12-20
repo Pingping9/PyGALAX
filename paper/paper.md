@@ -24,7 +24,7 @@ affiliations:
    index: 1
  - name: Atmospheric, Climate, and Earth Sciences Division, Pacific Northwest National Laboratory, Richland, WA, USA
    index: 2
-date: 2025-12-20
+date: 20 December 2025
 bibliography: paper.bib
 ---
 
@@ -72,12 +72,12 @@ PyGALAX offers several distinctive capabilities that make it suitable for advanc
 
 - **Parallel processing**: Built-in support for multicore processing enables efficient analysis of large spatial datasets.
 
-![Figure 1. PyGALAX Methodological Framework Extended from @Wang2025GALAX.\label{fig:framework}](figure1.png)
+![PyGALAX Methodological Framework Extended from @Wang2025GALAX.\label{fig:framework}](figure1.png)
 
-: Table 1. Example PyGALAX Commands {label="tab:commands"}
+: Example PyGALAX Commands \label{tab:commands}
 
-| Command | Description |
-|---------|---|
+| **Command** | **Description** |
+|-------|-----|
 | `Kernel(coords[i], coords, bw, fixed=False, function='bisquare')` | Create a kernel weighting matrix for spatial dependence modeling. |
 | `search_bw_lw_ISA(X, y, coords)` | Run standalone ISA to estimate an optimal bandwidth. |
 | `search_bandwidth(X, y, coords, automl_settings)` | Perform bandwidth optimization using AutoML model performance metrics. |
