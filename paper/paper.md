@@ -24,7 +24,7 @@ affiliations:
    index: 1
  - name: Atmospheric, Climate, and Earth Sciences Division, Pacific Northwest National Laboratory, Richland, WA, USA
    index: 2
-date: 19 December 2025
+date: 20 December 2025
 bibliography: paper.bib
 ---
 
@@ -58,7 +58,7 @@ pip install .
 
 # Key features
 
-PyGALAX offers several distinctive capabilities that make it suitable for advanced spatial analysis (\autoref{fig:framework} and \autoref{tab:commands}):
+PyGALAX offers several distinctive capabilities that make it suitable for advanced spatial analysis (Figure 1 and Table 1):
 
 - **Spatial AutoML integration**: PyGALAX automates the GALAX framework that implements geographically weighted AutoML, where different machine learning algorithms (e.g., Random Forest, XGBoost, Extra Trees) are automatically selected and optimized for each spatial location based on local data characteristics. This approach enables the capture of varying relationship structures across geographic space.
 
@@ -72,9 +72,9 @@ PyGALAX offers several distinctive capabilities that make it suitable for advanc
 
 - **Parallel processing**: Built-in support for multicore processing enables efficient analysis of large spatial datasets.
 
-![Figure 1. PyGALAX Methodological Framework Extended from Wang, Yuan, Li, et al. (2025) [@Wang2025GALAX]](figure1.png){label="fig:framework"}
+![PyGALAX Methodological Framework Extended from @Wang2025GALAX.\label{fig:framework}](figure1.png)
 
-: Table 1. Example PyGALAX Commands {label="tab:commands"}
+: Example PyGALAX Commands []{label="tab:commands"}
 
 | **Command** | **Description** |
 |------|--------------|
@@ -84,8 +84,8 @@ PyGALAX offers several distinctive capabilities that make it suitable for advanc
 | `model = GALAX(coords, y, X, task='regression', bw=None, kernel='bisquare')` | Initialize a GALAX model with coordinates (coords), target variable (y), and features (X). The model automatically selects the optimal bandwidth when bw=None. |
 | `results = model.fit()` | Fit the model using either ISA-based or performance-based bandwidth optimization, depending on data and task type. |
 | `results.summary()` | Display summary statistics for global and local model performance (e.g., R2, RMSE, or accuracy, precision, recall, and F1 score). |
-| `results.save_results("pygalax_output.joblib")` | Save the full model outputs (including SHAP values and predictions) as a serialized Joblib file. |
-| `results.get_detailed_shap_for_location(5)` | Retrieve detailed SHAP interpretation for a specific spatial location. |
+| `results.save_results(filename)` | Save model outputs (including SHAP values and predictions) as a Joblib file. |
+| `results.get_detailed_shap_for_location(i)` | Retrieve detailed SHAP interpretation for location i. |
 
 # Model architecture
 
