@@ -56,6 +56,8 @@ cd PyGALAX
 pip install .
 ```
 
+Installation from source is currently supported. A PyPI release will follow the review process to incorporate any feedback that may affect the software or documentation.
+
 # Key features
 
 PyGALAX offers several distinctive capabilities that make it suitable for advanced spatial analysis (\autoref{fig:framework} and \autoref{tab:commands}):
