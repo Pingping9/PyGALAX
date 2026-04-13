@@ -21,6 +21,10 @@ class GALAXResults:
     including local and global performance metrics, SHAP interpretations, and 
     detailed location-specific outputs.
     
+    When the model is fitted with loo=True, global metrics are computed from
+    leave-one-out (LOO) predictions: each location's prediction comes from a
+    local model retrained without the center observation.
+    
     Parameters
     ----------
     model : GALAX
@@ -35,7 +39,9 @@ class GALAXResults:
     results : list
         Successful location results
     params : array
-        Model predictions for each location
+        Global R² score (regression only)
+    params_loo : list or None
+        Leave-one-out predictions (only when loo=True)
     local_metrics : array
         Local performance metrics (R² for regression, accuracy for classification)
     global_r2 : float
@@ -80,34 +86,67 @@ class GALAXResults:
             self.y_neighbors_values.append(np.array(r['y_neighbors_values']))
             self.weights_neighbors.append(np.array(r['weights_neighbors']))
 
+        use_loo = self.model.loo
+
+        if use_loo:
+            self.params_loo = [r.get('prediction_loo') for r in self.results]
+            loo_valid_mask = [p is not None for p in self.params_loo]
+            self.n_loo_valid = sum(loo_valid_mask)
+
         if self.model.task == 'classification':
             self.local_precision = np.array([r['precision'] for r in self.results])
             self.local_recall = np.array([r['recall'] for r in self.results])
             self.local_f1 = np.array([r['f1'] for r in self.results])
 
-            y_pred = self.params
-            y_true = self.model.y[self.location_original_indices]
+            if use_loo and self.n_loo_valid > 0:
+                y_pred_loo = np.array([p for p, v in zip(self.params_loo, loo_valid_mask) if v])
+                indices_loo = [idx for idx, v in zip(self.location_original_indices, loo_valid_mask) if v]
+                y_true_loo = self.model.y[indices_loo]
 
-            if len(y_true) == 0 or len(y_pred) == 0:
+                self.global_accuracy = accuracy_score(y_true_loo, y_pred_loo)
+                self.global_precision = precision_score(y_true_loo, y_pred_loo, average='weighted', zero_division=np.nan)
+                self.global_recall = recall_score(y_true_loo, y_pred_loo, average='weighted', zero_division=np.nan)
+                self.global_f1 = f1_score(y_true_loo, y_pred_loo, average='weighted', zero_division=np.nan)
+            elif use_loo:
                 self.global_accuracy = np.nan
                 self.global_precision = np.nan
                 self.global_recall = np.nan
                 self.global_f1 = np.nan
             else:
-                self.global_accuracy = accuracy_score(y_true, y_pred)
-                self.global_precision = precision_score(y_true, y_pred, average='weighted', zero_division=np.nan)
-                self.global_recall = recall_score(y_true, y_pred, average='weighted', zero_division=np.nan)
-                self.global_f1 = f1_score(y_true, y_pred, average='weighted', zero_division=np.nan)
-        else:
-            y_pred = self.params.reshape(-1, 1)
-            y_true = self.model.y[self.location_original_indices].reshape(-1, 1)
+                y_pred = self.params
+                y_true = self.model.y[self.location_original_indices]
 
-            if len(y_true) == 0 or len(y_pred) == 0:
+                if len(y_true) == 0 or len(y_pred) == 0:
+                    self.global_accuracy = np.nan
+                    self.global_precision = np.nan
+                    self.global_recall = np.nan
+                    self.global_f1 = np.nan
+                else:
+                    self.global_accuracy = accuracy_score(y_true, y_pred)
+                    self.global_precision = precision_score(y_true, y_pred, average='weighted', zero_division=np.nan)
+                    self.global_recall = recall_score(y_true, y_pred, average='weighted', zero_division=np.nan)
+                    self.global_f1 = f1_score(y_true, y_pred, average='weighted', zero_division=np.nan)
+        else:
+            if use_loo and self.n_loo_valid > 0:
+                y_pred_loo = np.array([p for p, v in zip(self.params_loo, loo_valid_mask) if v], dtype=float).reshape(-1, 1)
+                indices_loo = [idx for idx, v in zip(self.location_original_indices, loo_valid_mask) if v]
+                y_true_loo = self.model.y[indices_loo].reshape(-1, 1)
+
+                self.global_r2 = r2_score(y_true_loo, y_pred_loo)
+                self.global_rmse = np.sqrt(mean_squared_error(y_true_loo, y_pred_loo))
+            elif use_loo:
                 self.global_r2 = np.nan
                 self.global_rmse = np.nan
             else:
-                self.global_r2 = r2_score(y_true, y_pred)
-                self.global_rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+                y_pred = self.params.reshape(-1, 1)
+                y_true = self.model.y[self.location_original_indices].reshape(-1, 1)
+
+                if len(y_true) == 0 or len(y_pred) == 0:
+                    self.global_r2 = np.nan
+                    self.global_rmse = np.nan
+                else:
+                    self.global_r2 = r2_score(y_true, y_pred)
+                    self.global_rmse = np.sqrt(mean_squared_error(y_true, y_pred))
 
     def summary(self):
         """Print summary statistics"""
@@ -117,11 +156,23 @@ class GALAXResults:
         print(f"Bandwidth: {self.model.bw}")
         print(f"Kernel function: {self.model.kernel}")
         print(f"Bandwidth type: {'Fixed' if self.model.fixed else 'Adaptive'}")
+        if self.model.loo:
+            total = len(self.results)
+            print(f"Global metric mode: LOO (leave-one-out)")
+            print(f"LOO predictions valid: {self.n_loo_valid} / {total}")
+
         if self.model.task == 'classification':
-            print(f"Global Accuracy: {self.global_accuracy:.4f}")
-            print(f"Global Precision: {self.global_precision:.4f}")
-            print(f"Global Recall: {self.global_recall:.4f}")
-            print(f"Global F1 Score: {self.global_f1:.4f}")
+            if self.model.loo:
+                print(f"\nGlobal Metrics (LOO):")
+                print(f"  Accuracy:  {self.global_accuracy:.4f}")
+                print(f"  Precision: {self.global_precision:.4f}")
+                print(f"  Recall:    {self.global_recall:.4f}")
+                print(f"  F1 Score:  {self.global_f1:.4f}")
+            else:
+                print(f"Global Accuracy: {self.global_accuracy:.4f}")
+                print(f"Global Precision: {self.global_precision:.4f}")
+                print(f"Global Recall: {self.global_recall:.4f}")
+                print(f"Global F1 Score: {self.global_f1:.4f}")
             print(f"\nLocal Precision Statistics:")
             print(f"  - Mean: {np.mean(self.local_precision):.4f}")
             print(f"  - Min: {np.min(self.local_precision):.4f}")
@@ -138,8 +189,13 @@ class GALAXResults:
             print(f"  - Max: {np.max(self.local_f1):.4f}")
             print(f"  - Std: {np.std(self.local_f1):.4f}")
         else:
-            print(f"Global R²: {self.global_r2:.4f}")
-            print(f"Global RMSE: {self.global_rmse:.4f}")
+            if self.model.loo:
+                print(f"\nGlobal Metrics (LOO):")
+                print(f"  R²:   {self.global_r2:.4f}")
+                print(f"  RMSE: {self.global_rmse:.4f}")
+            else:
+                print(f"Global R²: {self.global_r2:.4f}")
+                print(f"Global RMSE: {self.global_rmse:.4f}")
             print(f"\nLocal R² Statistics:")
             print(f"  - Mean: {np.mean(self.local_metrics):.4f}")
             print(f"  - Min: {np.min(self.local_metrics):.4f}")
@@ -299,6 +355,14 @@ class GALAXResults:
             'total_locations': total_locations,
             'successful_locations': successful_locations
         }
+        if self.model.loo:
+            results_dict['loo'] = True
+            results_dict['predictions_loo'] = [
+                p if p is None else (float(p) if self.model.task != 'classification' else p)
+                for p in self.params_loo
+            ]
+            results_dict['n_loo_valid'] = self.n_loo_valid
+
         if self.model.task == 'classification':
             results_dict.update({
                 'global_accuracy': self.global_accuracy,
