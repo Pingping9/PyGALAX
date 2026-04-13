@@ -11,6 +11,7 @@ from joblib import Parallel, delayed
 from flaml import AutoML
 from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, precision_score, recall_score, f1_score
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.base import clone
 from scipy import stats
 import shap
 
@@ -49,9 +50,13 @@ class GALAX:
         Names of independent variables
     task : str, optional
         Type of task: 'regression' or 'classification'
+    loo : bool, optional
+        Whether to compute leave-one-out (LOO) predictions for global metrics.
+        When True, the center observation is excluded from the local training
+        set when producing the global prediction. 
     """
     def __init__(self, coords, y, X, bw=None, kernel='bisquare', fixed=False,
-                 automl_settings=None, n_jobs=None, x_vars=None, task='regression'):
+                 automl_settings=None, n_jobs=None, x_vars=None, task='regression', loo=False):
         self.coords = np.array(coords)
         self.y = np.array(y)
         self.X = np.array(X)
@@ -60,6 +65,7 @@ class GALAX:
         self.fixed = fixed
         self.x_vars = x_vars
         self.task = task
+        self.loo = loo
 
         if isinstance(bw, str) and bw not in ['isa', 'performance']:
             raise ValueError(f"Invalid bandwidth method: '{bw}'. Must be 'isa' or 'performance'.")
@@ -182,7 +188,13 @@ class GALAX:
         return GALAXResults(self, results)
 
     def _process_location(self, i):
-        """Process a single location"""
+        """
+        Process a single location.
+        
+        Trains a full-neighborhood AutoML model for SHAP interpretation and local goodness-of-fit metrics. 
+        Additionally produces a leave-one-out (LOO) prediction for the center point by retraining the best 
+        estimator on the neighborhood excluding the center.
+        """
         try:
             weights_i = self._build_wi(i)
             neighbors_indices = np.where(weights_i > 0)[0]
@@ -249,6 +261,31 @@ class GALAX:
 
             pred_i = automl.predict(self.X[i].reshape(1, -1))[0]
 
+            # --- LOO prediction (only when loo=True) ---
+            pred_i_loo = None
+            if self.loo:
+                center_pos = np.where(neighbors_indices == i)[0]
+                if len(center_pos) > 0:
+                    center_pos = center_pos[0]
+                    loo_mask = np.ones(len(neighbors_indices), dtype=bool)
+                    loo_mask[center_pos] = False
+
+                    X_loo = X_neighbors[loo_mask]
+                    y_loo = y_neighbors[loo_mask]
+                    w_loo = weights_neighbors[loo_mask]
+
+                    can_loo = len(X_loo) >= 2
+                    if self.task == 'classification' and can_loo:
+                        can_loo = len(np.unique(y_loo)) >= 2
+
+                    if can_loo:
+                        try:
+                            loo_model = clone(automl.model.estimator)
+                            loo_model.fit(X_loo, y_loo.ravel(), sample_weight=w_loo)
+                            pred_i_loo = loo_model.predict(self.X[i].reshape(1, -1))[0]
+                        except Exception:
+                            pred_i_loo = None
+
             location_results = {
                 'location_index': i,
                 'model': automl.model.estimator,
@@ -260,6 +297,8 @@ class GALAX:
                 'y_neighbors_values': y_neighbors.tolist(),
                 'weights_neighbors': weights_neighbors.tolist(),
             }
+            if self.loo:
+                location_results['prediction_loo'] = pred_i_loo
             location_results.update(additional_metrics)
             print(f"Location {i}/{self.X.shape[0]} successfully trained ML model")
 
