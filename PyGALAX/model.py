@@ -2,22 +2,21 @@
 Core GALAX implementation.
 """
 
-import os
 import sys
 import numpy as np
 np.float = float
 import pandas as pd
 from joblib import Parallel, delayed
 from flaml import AutoML
-from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, precision_score, recall_score, f1_score
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.base import clone
-from scipy import stats
+from sklearn.metrics import r2_score, precision_score, recall_score, f1_score
+from sklearn.model_selection import train_test_split
 import shap
 
-from .kernel import Kernel
+from .kernel import Kernel, is_geographic
 from .bandwidth import search_bw_lw_ISA, search_bandwidth
-from .results import GALAXResults
+from .results import GALAXResults, LocalHoldoutResults
+
+TREE_ESTIMATORS = {'rf', 'extra_tree', 'xgboost', 'xgb_limitdepth', 'lgbm', 'catboost', 'histgb'}
 
 
 class GALAX:
@@ -50,13 +49,24 @@ class GALAX:
         Names of independent variables
     task : str, optional
         Type of task: 'regression' or 'classification'
-    loo : bool, optional
-        Whether to compute leave-one-out (LOO) predictions for global metrics.
-        When True, the center observation is excluded from the local training
-        set when producing the global prediction. 
+    evaluation_mode : str, optional
+        'gwr_automl' (default) fits each location's full-neighborhood model and
+        reports the usual local and global metrics.
+        'local_holdout' splits every neighborhood into train/test, fits
+        one model per location on the train neighbors, and reports held-out
+        local metrics plus a pooled out-of-sample focal-holdout global metric.
+    test_size : float, optional
+        Fraction of each neighborhood held out for testing in 'local_holdout' mode (default 0.3). 
+        The focal observation is always placed in the test set.
+    split_seed : int, optional
+        Random seed for the per-neighborhood train/test split (default 42).
+    spherical : bool or None, optional
+        Distance metric override. None (default) auto-detects geographic (longitude/latitude) coordinates 
+        and uses great-circle distance for them, Euclidean otherwise. 
+        Pass True to force great-circle distance or False to force Euclidean.
     """
-    def __init__(self, coords, y, X, bw=None, kernel='bisquare', fixed=False,
-                 automl_settings=None, n_jobs=None, x_vars=None, task='regression', loo=False):
+    def __init__(self, coords, y, X, bw=None, kernel='bisquare', fixed=False, automl_settings=None, n_jobs=None, x_vars=None, task='regression',
+                 evaluation_mode='gwr_automl', test_size=0.3, split_seed=42, spherical=None):
         self.coords = np.array(coords)
         self.y = np.array(y)
         self.X = np.array(X)
@@ -65,10 +75,17 @@ class GALAX:
         self.fixed = fixed
         self.x_vars = x_vars
         self.task = task
-        self.loo = loo
+        self.spherical = is_geographic(self.coords) if spherical is None else bool(spherical)
 
         if isinstance(bw, str) and bw not in ['isa', 'performance']:
             raise ValueError(f"Invalid bandwidth method: '{bw}'. Must be 'isa' or 'performance'.")
+        if evaluation_mode not in ('gwr_automl', 'local_holdout'):
+            raise ValueError(f"Invalid evaluation_mode: '{evaluation_mode}'. Must be 'gwr_automl' or 'local_holdout'.")
+        if not 0 < test_size < 1:
+            raise ValueError(f"test_size must be between 0 and 1, got {test_size}.")
+        self.evaluation_mode = evaluation_mode
+        self.test_size = test_size
+        self.split_seed = split_seed
 
         default_settings = {
             "time_budget": 180,
@@ -79,8 +96,7 @@ class GALAX:
             "verbose": 0,
         }
         self.automl_settings = {**default_settings, **(automl_settings or {})}
-        total_cpus = os.cpu_count()
-        default_jobs = int(total_cpus * 0.5)
+        default_jobs = 4
         self.n_jobs = n_jobs if n_jobs is not None else default_jobs
 
     def _build_wi(self, i):
@@ -97,7 +113,7 @@ class GALAX:
         array
             Weight vector for location i
         """
-        kernel_obj = Kernel(self.coords[i], self.coords, self.bw, fixed=self.fixed, function=self.kernel)
+        kernel_obj = Kernel(self.coords[i], self.coords, self.bw, fixed=self.fixed, function=self.kernel, spherical=self.spherical)
         return kernel_obj.kernel
 
     def fit(self):
@@ -122,7 +138,8 @@ class GALAX:
                     kernel=self.kernel,
                     fixed=self.fixed,
                     task=self.task,
-                    min_samples_per_class=5
+                    min_samples_per_class=5,
+                    spherical=self.spherical
                 )
                 print("ISA bandwidth selection successful:")
                 print(f"- Optimal bandwidth: {self.bw}")
@@ -136,7 +153,8 @@ class GALAX:
                                               kernel=self.kernel,
                                               fixed=self.fixed,
                                               n_jobs=self.n_jobs,
-                                              task=self.task)
+                                              task=self.task,
+                                              spherical=self.spherical)
                 self.bw = search_result['best_bandwidth']
                 print("Performance-based bandwidth selection successful:")
                 print(f"- Optimal bandwidth: {self.bw}")
@@ -151,7 +169,8 @@ class GALAX:
                     kernel=self.kernel,
                     fixed=self.fixed,
                     task=self.task,
-                    min_samples_per_class=5
+                    min_samples_per_class=5,
+                    spherical=self.spherical
                 )
                 print("ISA bandwidth selection successful:")
                 print(f"- Optimal bandwidth: {self.bw}")
@@ -167,13 +186,17 @@ class GALAX:
                                               kernel=self.kernel,
                                               fixed=self.fixed,
                                               n_jobs=self.n_jobs,
-                                              task=self.task)
+                                              task=self.task,
+                                              spherical=self.spherical)
                 self.bw = search_result['best_bandwidth']
                 print("Performance-based bandwidth selection successful:")
                 print(f"- Optimal bandwidth: {self.bw}")
                 print(f"- Optimization metric: {search_result['metric']}")
             except Exception as e:
                 raise ValueError(f"Performance-based bandwidth search failed: {str(e)}")
+
+        if self.evaluation_mode == 'local_holdout':
+            return self._fit_local_holdout()
 
         # Process all locations in parallel
         results = Parallel(n_jobs=self.n_jobs)(
@@ -190,10 +213,9 @@ class GALAX:
     def _process_location(self, i):
         """
         Process a single location.
-        
-        Trains a full-neighborhood AutoML model for SHAP interpretation and local goodness-of-fit metrics. 
-        Additionally produces a leave-one-out (LOO) prediction for the center point by retraining the best 
-        estimator on the neighborhood excluding the center.
+
+        Trains a full-neighborhood AutoML model for SHAP interpretation and local
+        goodness-of-fit metrics, and predicts the focal location.
         """
         try:
             weights_i = self._build_wi(i)
@@ -208,8 +230,17 @@ class GALAX:
 
             y_pred_neighbors = automl.predict(X_neighbors)
 
-            explainer = shap.TreeExplainer(automl.model.estimator)
-            raw_shap_values = explainer.shap_values(X_neighbors)
+            if automl.best_estimator in TREE_ESTIMATORS:
+                explainer = shap.TreeExplainer(automl.model.estimator)
+                raw_shap_values = explainer.shap_values(X_neighbors)
+            else:
+                # model-agnostic fallback for non-tree estimators
+                estimator = automl.model.estimator
+                predict_fn = estimator.predict
+                if self.task == 'classification' and hasattr(estimator, 'predict_proba'):
+                    predict_fn = estimator.predict_proba
+                explainer = shap.Explainer(predict_fn, X_neighbors)
+                raw_shap_values = explainer(X_neighbors).values
 
             if isinstance(raw_shap_values, list):
                 raw_shap_values_serializable = [s.tolist() for s in raw_shap_values]
@@ -225,11 +256,14 @@ class GALAX:
                 labels = labels[~pd.isna(labels)]
 
                 precision_per_class = precision_score(y_neighbors, y_pred_neighbors,
-                                                      average=None, labels=labels, zero_division=np.nan)
+                                                      average=None, labels=labels,
+                                                      sample_weight=weights_neighbors, zero_division=np.nan)
                 recall_per_class = recall_score(y_neighbors, y_pred_neighbors,
-                                                average=None, labels=labels, zero_division=np.nan)
+                                                average=None, labels=labels,
+                                                sample_weight=weights_neighbors, zero_division=np.nan)
                 f1_per_class = f1_score(y_neighbors, y_pred_neighbors,
-                                        average=None, labels=labels, zero_division=np.nan)
+                                        average=None, labels=labels,
+                                        sample_weight=weights_neighbors, zero_division=np.nan)
 
                 precision = np.nanmean(precision_per_class)
                 recall = np.nanmean(recall_per_class)
@@ -261,31 +295,6 @@ class GALAX:
 
             pred_i = automl.predict(self.X[i].reshape(1, -1))[0]
 
-            # --- LOO prediction (only when loo=True) ---
-            pred_i_loo = None
-            if self.loo:
-                center_pos = np.where(neighbors_indices == i)[0]
-                if len(center_pos) > 0:
-                    center_pos = center_pos[0]
-                    loo_mask = np.ones(len(neighbors_indices), dtype=bool)
-                    loo_mask[center_pos] = False
-
-                    X_loo = X_neighbors[loo_mask]
-                    y_loo = y_neighbors[loo_mask]
-                    w_loo = weights_neighbors[loo_mask]
-
-                    can_loo = len(X_loo) >= 2
-                    if self.task == 'classification' and can_loo:
-                        can_loo = len(np.unique(y_loo)) >= 2
-
-                    if can_loo:
-                        try:
-                            loo_model = clone(automl.model.estimator)
-                            loo_model.fit(X_loo, y_loo.ravel(), sample_weight=w_loo)
-                            pred_i_loo = loo_model.predict(self.X[i].reshape(1, -1))[0]
-                        except Exception:
-                            pred_i_loo = None
-
             location_results = {
                 'location_index': i,
                 'model': automl.model.estimator,
@@ -297,8 +306,6 @@ class GALAX:
                 'y_neighbors_values': y_neighbors.tolist(),
                 'weights_neighbors': weights_neighbors.tolist(),
             }
-            if self.loo:
-                location_results['prediction_loo'] = pred_i_loo
             location_results.update(additional_metrics)
             print(f"Location {i}/{self.X.shape[0]} successfully trained ML model")
 
@@ -307,3 +314,119 @@ class GALAX:
         except Exception as e:
             print(f"Error at location {i}: {str(e)}", file=sys.stderr)
             return None
+
+    # ------------------------------------------------------------------
+    # local_holdout evaluation
+    # ------------------------------------------------------------------
+    def _fit_local_holdout(self):
+        """Fit one model per location on a per-neighborhood train/test split."""
+        results = Parallel(n_jobs=self.n_jobs)(
+            delayed(self._process_location_holdout)(i)
+            for i in range(len(self.y))
+        )
+        valid = [r for r in results if r is not None]
+        print(f"local_holdout: valid locations {len(valid)} / {self.X.shape[0]}")
+        return LocalHoldoutResults(self, results)
+
+    @staticmethod
+    def _weighted_rmse(y_true, y_pred, w):
+        return float(np.sqrt(np.average((y_true - y_pred) ** 2, weights=w)))
+
+    def _process_location_holdout(self, i):
+        """
+        Split location i's neighborhood into train/test (focal forced into test),
+        fit one AutoML model on the train neighbors, and return held-out local
+        metrics plus the out-of-sample focal prediction.
+        """
+        try:
+            weights_i = self._build_wi(i)
+            neighbors_indices = np.where(weights_i > 0)[0]
+
+            focal_arr = np.where(neighbors_indices == i)[0]
+            if len(focal_arr) == 0:
+                return None
+            focal_pos = int(focal_arr[0])
+
+            X_n = self.X[neighbors_indices]
+            y_n = self.y[neighbors_indices]
+            w_n = weights_i[neighbors_indices]
+            n = len(neighbors_indices)
+
+            non_focal = np.array([p for p in range(n) if p != focal_pos])
+            if len(non_focal) < 3:
+                return None
+
+            n_test_total = max(2, int(round(self.test_size * n)))
+            n_test_nonfocal = min(max(n_test_total - 1, 1), len(non_focal) - 2)
+            if n_test_nonfocal < 1:
+                return None
+
+            stratify = y_n[non_focal].ravel() if self.task == 'classification' else None
+            try:
+                train_pos, test_nf_pos = train_test_split(
+                    non_focal, test_size=n_test_nonfocal,
+                    random_state=self.split_seed, stratify=stratify)
+            except ValueError:
+                try:
+                    train_pos, test_nf_pos = train_test_split(
+                        non_focal, test_size=n_test_nonfocal,
+                        random_state=self.split_seed, stratify=None)
+                except ValueError:
+                    return None
+            test_pos = np.append(test_nf_pos, focal_pos)
+
+            if len(train_pos) < 2 or len(test_pos) < 2:
+                return None
+
+            X_tr, y_tr, w_tr = X_n[train_pos], y_n[train_pos], w_n[train_pos]
+            X_te, y_te, w_te = X_n[test_pos], y_n[test_pos], w_n[test_pos]
+            if np.sum(w_tr) <= 0 or np.sum(w_te) <= 0:
+                return None
+            if self.task == 'classification' and len(np.unique(y_tr)) < 2:
+                return None
+
+            automl = AutoML()
+            automl.fit(X_tr, y_tr.ravel(), sample_weight=w_tr, **self.automl_settings)
+            if getattr(automl, 'model', None) is None:
+                return None
+
+            yp_tr = np.asarray(automl.predict(X_tr)).ravel()
+            yp_te = np.asarray(automl.predict(X_te)).ravel()
+            focal_pred = yp_te[-1]
+
+            rec = {
+                'location_index': i,
+                'focal_pred': focal_pred,
+                'focal_true': np.asarray(self.y[i]).ravel()[0],
+                'n_train': int(len(train_pos)),
+                'n_test': int(len(test_pos)),
+            }
+            if self.task == 'classification':
+                yt_tr, yt_te = y_tr.ravel(), y_te.ravel()
+                rec['train_accuracy'] = float(np.sum(w_tr * (yt_tr == yp_tr)) / np.sum(w_tr))
+                rec['test_accuracy'] = float(np.sum(w_te * (yt_te == yp_te)) / np.sum(w_te))
+                rec['train_precision'], rec['train_recall'], rec['train_f1'] = self._macro_prf(yt_tr, yp_tr, w_tr)
+                rec['test_precision'], rec['test_recall'], rec['test_f1'] = self._macro_prf(yt_te, yp_te, w_te)
+            else:
+                yt_tr, yt_te = y_tr.ravel().astype(float), y_te.ravel().astype(float)
+                rec['train_r2'] = float(r2_score(yt_tr, yp_tr, sample_weight=w_tr, force_finite=False))
+                rec['test_r2'] = float(r2_score(yt_te, yp_te, sample_weight=w_te, force_finite=False))
+                rec['train_rmse'] = self._weighted_rmse(yt_tr, yp_tr, w_tr)
+                rec['test_rmse'] = self._weighted_rmse(yt_te, yp_te, w_te)
+            print(f"local_holdout: location {i}/{self.X.shape[0]} done")
+            return rec
+
+        except Exception as e:
+            print(f"Error at location {i}: {str(e)}", file=sys.stderr)
+            return None
+
+    @staticmethod
+    def _macro_prf(y_true, y_pred, w):
+        labels = np.unique(np.concatenate([y_true, y_pred]))
+        p = np.nanmean(precision_score(y_true, y_pred, labels=labels, average=None,
+                                       sample_weight=w, zero_division=np.nan))
+        r = np.nanmean(recall_score(y_true, y_pred, labels=labels, average=None,
+                                    sample_weight=w, zero_division=np.nan))
+        f = np.nanmean(f1_score(y_true, y_pred, labels=labels, average=None,
+                                sample_weight=w, zero_division=np.nan))
+        return float(p), float(r), float(f)
