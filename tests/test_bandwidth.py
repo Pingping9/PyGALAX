@@ -29,7 +29,6 @@ class TestCheckClassSizes:
     
     def test_check_class_sizes_with_invalid_weights(self):
         """Test with weights that may have problematic locations."""
-        # Create weights where some locations have no neighbors
         weights_sparse = np.array([
             [1.0, 0.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.8, 0.0, 0.0],
@@ -41,107 +40,60 @@ class TestCheckClassSizes:
         assert isinstance(result, bool)
 
 
+
 class TestSearchBandwidth:
-    """Test cases for bandwidth search functions."""
-    
+    """Bandwidth search: correct signatures, return types, and kernel weighting."""
+
     def setup_method(self):
-        """Set up test fixtures."""
-        np.random.seed(42)
-        self.n_samples = 20
-        self.coords = np.random.uniform(0, 10, (self.n_samples, 2))
-        self.X = np.random.normal(0, 1, (self.n_samples, 3))
-        self.y_regression = np.random.normal(0, 1, self.n_samples)
-        self.y_classification = np.random.randint(0, 2, self.n_samples)
-    
-    def test_search_bw_lw_isa_regression(self):
-        """Test ISA bandwidth search for regression."""
-        try:
-            bw = search_bw_lw_ISA(
-                self.coords, self.y_regression, self.X,
-                kernel='bisquare', task='regression'
-            )
-            assert bw is not None
-            assert isinstance(bw, (int, float))
-            assert bw > 0
-        except Exception as e:
-            # ISA might fail in some cases, which is acceptable
-            print(f"ISA search failed: {e}")
-    
-    def test_search_bw_lw_isa_classification(self):
-        """Test ISA bandwidth search for classification."""
-        try:
-            bw = search_bw_lw_ISA(
-                self.coords, self.y_classification, self.X,
-                kernel='bisquare', task='classification'
-            )
-            assert bw is not None
-            assert isinstance(bw, (int, float))
-            assert bw > 0
-        except Exception as e:
-            # ISA might fail in some cases, which is acceptable
-            print(f"ISA search failed: {e}")
-    
-    def test_search_bandwidth_regression(self):
-        """Test bandwidth search for regression."""
-        automl_settings = {
-            "time_budget": 60,
-            "estimator_list": ['rf'],
-            "task": 'regression',
-            "metric": 'r2',
-            "seed": 42,
-        }
-        try:
-            bw = search_bandwidth(
-                self.X, self.y_regression, self.coords, automl_settings,
-                kernel='bisquare', task='regression'
-            )
-            assert bw is not None
-            assert isinstance(bw, (int, float))
-            assert bw > 0
-        except ValueError as e:
-            print(f"Bandwidth search failed as expected: {e}")
-    
-    def test_search_bandwidth_classification(self):
-        """Test bandwidth search for classification."""
-        automl_settings = {
-            "time_budget": 60,
-            "estimator_list": ['rf'],
-            "task": 'classification',
-            "metric": 'accuracy',
-            "seed": 42,
-        }
-        try:
-            bw = search_bandwidth(
-                self.X, self.y_classification, self.coords, automl_settings,
-                kernel='bisquare', task='classification'
-            )
-            assert bw is not None
-            assert isinstance(bw, (int, float))
-            assert bw > 0
-        except ValueError as e:
-            print(f"Bandwidth search failed as expected: {e}")
+        gx, gy = np.meshgrid(np.linspace(0, 9, 6), np.linspace(0, 9, 6))
+        self.coords = np.column_stack([gx.ravel(), gy.ravel()])
+        self.n = len(self.coords)
+        self.y = self.coords[:, 0].astype(float)
+        self.X = np.random.RandomState(0).normal(0, 1, (self.n, 3))
+
+    def test_isa_returns_tuple(self):
+        bw, moran_i, p_value = search_bw_lw_ISA(
+            self.X, self.y, self.coords, kernel='bisquare', task='regression', spherical=False)
+        assert bw > 0
+        assert np.isfinite(moran_i)
+        assert 0.0 <= p_value <= 1.0
+
+    def test_search_bandwidth_returns_dict(self, fake_automl):
+        settings = {"time_budget": 1, "estimator_list": ['rf'], "task": 'regression',
+                    "metric": 'r2', "seed": 42, "verbose": 0}
+        out = search_bandwidth(self.X, self.y, self.coords, settings, kernel='bisquare',
+                               fixed=False, n_jobs=1, bw_min=8, bw_max=10, step=1,
+                               task='regression', spherical=False)
+        assert isinstance(out, dict)
+        assert out['best_bandwidth'] > 0
+
+    def test_f7_adaptive_uses_kernel_weights(self, fake_automl):
+        settings = {"time_budget": 1, "estimator_list": ['rf'], "task": 'regression',
+                    "metric": 'r2', "seed": 42, "verbose": 0}
+        search_bandwidth(self.X, self.y, self.coords, settings, kernel='bisquare',
+                         fixed=False, n_jobs=1, bw_min=8, bw_max=8, step=1,
+                         task='regression', spherical=False)
+        weights = [a.sample_weight for a in fake_automl.instances if a.sample_weight is not None]
+        assert weights
+        assert all(np.all(np.isfinite(w)) for w in weights)
+        assert any(np.unique(w[w > 0]).size > 1 for w in weights)
 
 
-class TestBandwidthValidation:
-    """Test bandwidth parameter validation."""
-    
-    def test_bandwidth_positive(self):
-        """Test that bandwidth values are positive."""
-        coords = np.array([[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]])
-        y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        X = np.array([[1, 2], [2, 3], [3, 4], [4, 5], [5, 6]])
-        
-        automl_settings = {
-            "time_budget": 60,
-            "estimator_list": ['rf'],
-            "task": 'regression',
-            "metric": 'r2',
-            "seed": 42,
-        }
-        
-        try:
-            bw = search_bandwidth(X, y, coords, automl_settings, kernel='bisquare', task='regression')
-            assert bw > 0
-        except ValueError as e:
-            print(f"Bandwidth search failed with small dataset: {e}")
+def test_f2_fixed_isa_moran_gets_diagonal_free_weights(monkeypatch):
+    import PyGALAX.bandwidth as bwmod
+    captured = {}
 
+    class FakeMoran:
+        def __init__(self, y, w):
+            captured['w'] = w
+            self.I, self.z_norm, self.p_norm = 0.5, 3.0, 0.001
+
+    monkeypatch.setattr(bwmod, 'Moran', FakeMoran)
+    coords = np.column_stack([np.linspace(0, 10, 12), np.zeros(12)])
+    y = coords[:, 0].astype(float)
+    X = np.zeros((12, 2))
+    bwmod.search_bw_lw_ISA(X, y, coords, fixed=True, bw_min=3, bw_max=5, step=1, task='regression', spherical=False)
+    w = captured['w']
+    assert sum(len(nbrs) for nbrs in w.neighbors.values()) > 0
+    for i, neighbors in w.neighbors.items():
+        assert i not in neighbors
