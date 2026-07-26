@@ -2,17 +2,17 @@
 Bandwidth selection methods for GALAX.
 """
 
-import os
 import numpy as np
 np.float = float
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.metrics import r2_score
 from flaml import AutoML
 import libpysal
 from esda import Moran
 
-from .kernel import Kernel
+from .kernel import Kernel, is_geographic
 
 
 def check_class_sizes(weights, y_values, min_samples):
@@ -98,7 +98,7 @@ def check_class_sizes(weights, y_values, min_samples):
     return all_valid
 
 
-def search_bw_lw_ISA(X, y, coords, bw_min=None, bw_max=None, step=1, kernel='bisquare', fixed=False, task='regression', min_samples_per_class=5):
+def search_bw_lw_ISA(X, y, coords, bw_min=None, bw_max=None, step=1, kernel='bisquare', fixed=False, task='regression', min_samples_per_class=5, spherical=None):
     """
     Search for optimal bandwidth using Incremental Spatial Autocorrelation (ISA).
     
@@ -124,7 +124,11 @@ def search_bw_lw_ISA(X, y, coords, bw_min=None, bw_max=None, step=1, kernel='bis
         Type of task: 'regression' or 'classification'
     min_samples_per_class : int, optional
         Minimum required samples per class
-        
+    spherical : bool or None, optional
+        Distance metric. None (default) auto-detects geographic (longitude/latitude)
+        coordinates and uses great-circle distance, Euclidean otherwise; True forces
+        great-circle distance, False forces Euclidean.
+
     Returns
     -------
     tuple
@@ -147,7 +151,12 @@ def search_bw_lw_ISA(X, y, coords, bw_min=None, bw_max=None, step=1, kernel='bis
     print("-" * 50)
 
     coords_array = np.array(coords)
-    kd = libpysal.cg.KDTree(coords_array)
+    spherical = is_geographic(coords_array) if spherical is None else bool(spherical)
+    if spherical:
+        kd = libpysal.cg.KDTree(coords_array, distance_metric='Arc',
+                                radius=libpysal.cg.RADIUS_EARTH_KM)
+    else:
+        kd = libpysal.cg.KDTree(coords_array)
 
     bandwidth_list = []
     moran_I_list = []
@@ -173,13 +182,20 @@ def search_bw_lw_ISA(X, y, coords, bw_min=None, bw_max=None, step=1, kernel='bis
         if fixed:
             w = np.zeros((len(y), len(y)))
             for i in range(len(y)):
-                kernel_obj = Kernel(coords_array[i], coords_array, current_bw, fixed=True, function=kernel)
+                kernel_obj = Kernel(coords_array[i], coords_array, current_bw, fixed=True,
+                                    function=kernel, spherical=spherical)
                 w[i] = kernel_obj.kernel
+            w_check = w
+            w_moran_array = w.copy()
+            np.fill_diagonal(w_moran_array, 0.0)
+            w_moran = libpysal.weights.full2W(w_moran_array)
         else:
             w = libpysal.weights.KNN(kd, current_bw)
+            w_check = w.full()[0]
+            w_moran = w
 
         if task == 'classification':
-            has_enough_samples = check_class_sizes(w.full()[0] if not fixed else w, y, min_samples_per_class)
+            has_enough_samples = check_class_sizes(w_check, y, min_samples_per_class)
             if not has_enough_samples:
                 print(f"✗ Bandwidth {current_bw} rejected: insufficient samples per class")
                 continue
@@ -192,7 +208,7 @@ def search_bw_lw_ISA(X, y, coords, bw_min=None, bw_max=None, step=1, kernel='bis
             pvalues = []
             for class_idx in range(n_classes):
                 class_values = y_onehot[:, class_idx]
-                moran = Moran(class_values, w)
+                moran = Moran(class_values, w_moran)
                 morans.append(moran.I)
                 zscores.append(moran.z_norm)
                 pvalues.append(moran.p_norm)
@@ -200,7 +216,7 @@ def search_bw_lw_ISA(X, y, coords, bw_min=None, bw_max=None, step=1, kernel='bis
             z_score = np.mean(zscores)
             p_value = np.mean(pvalues)
         else:
-            moran = Moran(y, w)
+            moran = Moran(y, w_moran)
             moran_I = moran.I
             z_score = moran.z_norm
             p_value = moran.p_norm
@@ -237,7 +253,7 @@ def search_bw_lw_ISA(X, y, coords, bw_min=None, bw_max=None, step=1, kernel='bis
     return found_bandwidth, found_moran_I, found_p_value
 
 
-def search_bandwidth(X, y, coords, automl_settings, bw_min=None, bw_max=None, step=1, kernel='bisquare', fixed=False, n_jobs=None, task='regression', min_samples_per_class=5):
+def search_bandwidth(X, y, coords, automl_settings, bw_min=None, bw_max=None, step=1, kernel='bisquare', fixed=False, n_jobs=None, task='regression', min_samples_per_class=5, spherical=None):
     """
     Optimize bandwidth using AutoML performance.
     
@@ -267,17 +283,21 @@ def search_bandwidth(X, y, coords, automl_settings, bw_min=None, bw_max=None, st
         Type of task: 'regression' or 'classification'
     min_samples_per_class : int, optional
         Minimum required samples per class
-        
+    spherical : bool or None, optional
+        Distance metric. None (default) auto-detects geographic (longitude/latitude)
+        coordinates and uses great-circle distance, Euclidean otherwise; True forces
+        great-circle distance, False forces Euclidean.
+
     Returns
     -------
     dict
         Search results including optimal bandwidth
     """
-    total_cpus = os.cpu_count()
-    n_jobs = n_jobs if n_jobs is not None else int(total_cpus * 0.5)
+    n_jobs = n_jobs if n_jobs is not None else 4
 
     n_samples = X.shape[0]
     n_vars = X.shape[1]
+    spherical = is_geographic(np.asarray(coords)) if spherical is None else bool(spherical)
 
     if bw_min is None:
         bw_min = max(round(n_samples * 0.05), n_vars + 2, 20)
@@ -287,15 +307,11 @@ def search_bandwidth(X, y, coords, automl_settings, bw_min=None, bw_max=None, st
     def evaluate_bandwidth(bw):
         local_scores = []
 
-        if fixed:
-            w = np.zeros((n_samples, n_samples))
-            for i in range(n_samples):
-                kernel_obj = Kernel(coords[i], coords, bw, fixed=True, function=kernel)
-                w[i] = kernel_obj.kernel
-        else:
-            kd = libpysal.cg.KDTree(coords)
-            w = libpysal.weights.KNN(kd, bw)
-            w = w.full()[0]
+        w = np.zeros((n_samples, n_samples))
+        for i in range(n_samples):
+            kernel_obj = Kernel(coords[i], coords, bw, fixed=fixed,
+                                function=kernel, spherical=spherical)
+            w[i] = kernel_obj.kernel
 
         # For classification, check class sizes first
         if task == 'classification':
@@ -324,7 +340,9 @@ def search_bandwidth(X, y, coords, automl_settings, bw_min=None, bw_max=None, st
                     correct_predictions = (y_local.ravel() == y_pred)
                     weighted_score = np.sum(weights_local * correct_predictions) / np.sum(weights_local)
                 else:
-                    weighted_score = automl.score(X_local, y_local.ravel())
+                    y_pred = automl.predict(X_local)
+                    weighted_score = r2_score(y_local.ravel(), np.asarray(y_pred).ravel(),
+                                              sample_weight=weights_local)
                 local_scores.append(weighted_score)
             except Exception as e:
                 print(f"Error at location {i}: {str(e)}")
