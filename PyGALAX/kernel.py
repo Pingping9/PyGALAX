@@ -6,6 +6,31 @@ import numpy as np
 np.float = float
 
 
+def is_geographic(coords):
+    """
+    Return whether finite 2D coordinates look like (longitude, latitude).
+
+    Parameters
+    ----------
+    coords : array
+        Spatial coordinates
+
+    Returns
+    -------
+    bool
+        True if coords is a finite (n, 2) array, otherwise False
+    """
+    c = np.asarray(coords, dtype=float)
+    return bool(
+        c.ndim == 2
+        and c.shape[0] > 0
+        and c.shape[1] == 2
+        and np.isfinite(c).all()
+        and np.all((-180 <= c[:, 0]) & (c[:, 0] <= 180))
+        and np.all((-90 <= c[:, 1]) & (c[:, 1] <= 90))
+    )
+
+
 class Kernel:
     """
     Kernel function specifications for GALAX.
