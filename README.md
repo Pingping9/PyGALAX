@@ -27,7 +27,7 @@ PyGALAX overcomes key limitations of traditional GWR, which captures spatial var
 2. **Geographically Weighted XAI**: Provides transparent interpretations through SHAP (SHapley Additive exPlanations) at both global and local scales, revealing spatial variations in feature importance and non-linear relationships.
 3. **Unified Framework**: Supports both regression and classification tasks within a single, intuitive interface.
 
-PyGALAX builds upon and improves the GALAX framework. Critical enhancements in PyGALAX include automatic bandwidth selection and flexible kernel function selection, providing greater flexibility and robustness for spatial modeling across diverse datasets and research questions.
+PyGALAX builds upon and improves the GALAX framework. Critical enhancements in PyGALAX include automatic bandwidth selection, flexible kernel function selection, great-circle distance support for geographic coordinates, and optional local-holdout evaluation mode,providing greater flexibility and robustness for spatial modeling across diverse datasets and research questions.
 
 ## Installation
 
