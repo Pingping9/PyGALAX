@@ -68,15 +68,14 @@ PyGALAX/
 │       ├── buffalo.shx
 │       └── buffalo.shp.xml
 │
-├── results/                    # Example output files
-│   ├── PyGALAX_regression_results.joblib
-│   ├── PyGALAX_classification_results.joblib
+├── results/                    # Example output figures
 │   ├── regression_feature.png
 │   ├── regression_r2.png
 │   ├── classification_precision.png
 │   └── classification_feature.png
 │
 ├── tests/                       # Unit tests for PyGALAX
+│   ├── conftest.py
 │   ├── test_kernel.py         
 │   ├── test_bandwidth.py       
 │   ├── test_model.py           
@@ -216,7 +215,7 @@ PyGALAX provides rich visualization capabilities to understand spatial patterns 
 <img src="results/regression_feature.png" alt="SHAP Importance" width="450" />
 *Local feature importance revealed through SHAP values*
 
-**Note**: See the Jupyter notebooks in `Notebooks/` for more visualizations using the Buffalo 311 dataset.
+**Note**: See the Jupyter notebooks in `Notebooks/` for more visulizations using the Buffalo 311 dataset.
 
 ## Data Attribution
 
