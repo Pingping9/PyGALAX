@@ -4,7 +4,7 @@ Tests for kernel.py module.
 
 import numpy as np
 import pytest
-from PyGALAX.kernel import Kernel
+from PyGALAX.kernel import Kernel, is_geographic
 
 
 class TestKernel:
@@ -12,7 +12,6 @@ class TestKernel:
     
     def setup_method(self):
         """Set up test fixtures."""
-        # Create simple 2D coordinates
         self.coords = np.array([
             [0, 0],
             [1, 0],
@@ -31,9 +30,7 @@ class TestKernel:
     def test_bisquare_kernel(self):
         """Test bisquare kernel function."""
         kernel = Kernel(self.center, self.coords, self.bandwidth, function='bisquare')
-        # Check that weights are between 0 and 1
         assert np.all((kernel.kernel >= 0) & (kernel.kernel <= 1))
-        # Center point should have highest weight
         assert kernel.kernel[0] >= kernel.kernel[1]
     
     def test_gaussian_kernel(self):
@@ -82,4 +79,37 @@ class TestKernelTypes:
                 assert np.all(kernel.kernel >= 0)
             except (ValueError, KeyError):
                 pass
+
+
+class TestIsGeographic:
+    """Tests for the geographic-coordinate heuristic."""
+
+    def test_lonlat_true(self):
+        coords = np.column_stack([np.linspace(-79, -78, 6), np.linspace(42, 43, 6)])
+        assert is_geographic(coords) is True
+
+    def test_projected_false(self):
+        assert is_geographic(np.random.uniform(2e5, 3e5, (6, 2))) is False
+
+    def test_bad_shape_false(self):
+        assert is_geographic(np.zeros((6, 3))) is False
+        assert is_geographic(np.empty((0, 2))) is False
+
+    def test_nonfinite_false(self):
+        assert is_geographic(np.array([[-78.0, 42.0], [np.nan, 42.0]])) is False
+
+
+class TestSphericalDistance:
+    """Great-circle vs Euclidean distance in the kernel."""
+
+    def test_haversine_known_distance(self):
+        coords = np.array([[0.0, 0.0], [0.0, 1.0]])
+        dist = Kernel(coords[0], coords, bw=500, fixed=True, function='bisquare', spherical=True).local_cdist()
+        assert np.isclose(dist[1], 111.19, atol=1.0)
+
+    def test_spherical_changes_weights(self):
+        coords = np.column_stack([np.linspace(-79, -78, 6), np.linspace(42, 43, 6)])
+        k_eucl = Kernel(coords[0], coords, bw=3, fixed=False, function='bisquare', spherical=False).kernel
+        k_sph = Kernel(coords[0], coords, bw=3, fixed=False, function='bisquare', spherical=True).kernel
+        assert not np.allclose(k_eucl, k_sph)
 
